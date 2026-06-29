@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+  - family-names: "Dasari"
+    given-names: "Tanishq"
+    email: "tan@animuslab.dev"
+title: "Canon"
+version: "0.1.0"
+date-released: "2026-06-29"
+url: "https://github.com/AnimusLab/Canon"
+repository-code: "https://github.com/AnimusLab/Canon"
+abstract: "A deterministic governance knowledge integrity engine for AI systems that tracks, hashes, and audits external regulatory and organizational policy states."
+keywords:
+  - "ai-governance"
+  - "compliance"
+  - "integrity-engine"
+  - "cryptography"
+  - "ledger"
+  - "audit"
+license: "Apache-2.0"
