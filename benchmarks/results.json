@@ -1,0 +1,65 @@
+[
+  {
+    "label": "SHA-256 source state hash (100 rules)",
+    "iterations": 1000,
+    "mean_us": 135.36,
+    "median_us": 129.0,
+    "p95_us": 155.1,
+    "p99_us": 253.4,
+    "throughput_per_sec": 7387.9
+  },
+  {
+    "label": "Diff engine - 100 rules, 5 changes",
+    "iterations": 1000,
+    "mean_us": 88.12,
+    "median_us": 83.3,
+    "p95_us": 104.1,
+    "p99_us": 176.0,
+    "throughput_per_sec": 11347.8
+  },
+  {
+    "label": "Diff engine - 500 rules, 20 changes",
+    "iterations": 1000,
+    "mean_us": 398.27,
+    "median_us": 366.7,
+    "p95_us": 548.1,
+    "p99_us": 834.1,
+    "throughput_per_sec": 2510.8
+  },
+  {
+    "label": "Evidence package hash generation",
+    "iterations": 1000,
+    "mean_us": 12.27,
+    "median_us": 11.2,
+    "p95_us": 11.5,
+    "p99_us": 18.7,
+    "throughput_per_sec": 81496.9
+  },
+  {
+    "label": "Ledger chain hash computation",
+    "iterations": 1000,
+    "mean_us": 1.34,
+    "median_us": 1.2,
+    "p95_us": 1.2,
+    "p99_us": 1.4,
+    "throughput_per_sec": 744990.0
+  },
+  {
+    "label": "Approval record hash (tamper-evident)",
+    "iterations": 1000,
+    "mean_us": 3.34,
+    "median_us": 3.3,
+    "p95_us": 3.4,
+    "p99_us": 3.7,
+    "throughput_per_sec": 299043.3
+  },
+  {
+    "label": "End-to-end: diff + evidence hash + ledger entry",
+    "iterations": 200,
+    "mean_us": 490.1,
+    "median_us": 450.05,
+    "p95_us": 734.2,
+    "p99_us": 1112.6,
+    "throughput_per_sec": 2040.4
+  }
+]
