@@ -16,11 +16,6 @@ graph TD
     D -->|4. Static Rules / Manifests| E["Anchor Runtime Guardrails"]
     E -->|5. Performance Critical Paths| F["AnchorJIT Compiler (Future)"]
     F -->|6. Optimized Executable Gate| G["Inference/Execution Path"]
-    
-    style B fill:#d4edda,stroke:#28a745,stroke-width:2px
-    style D fill:#cce5ff,stroke:#007bff,stroke-width:2px
-    style E fill:#fff3cd,stroke:#ffc107,stroke-width:2px
-    style F fill:#f8d7da,stroke:#dc3545,stroke-width:2px
 ```
 
 ---
