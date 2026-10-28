@@ -12,7 +12,8 @@ from pathlib import Path
 import httpx
 
 from canon.diff.engine import diff_states
-from canon.models import CanonLedgerEntry, EvidencePackage, SourceState
+from canon.ledger import GENESIS_HASH, Ledger
+from canon.models import EvidencePackage, SourceState
 from canon.sources.base import BaseSourceAdapter
 from canon.sources.finos import FINOSAdapter
 from canon.sources.nist import NISTAdapter
@@ -24,103 +25,147 @@ _DEFAULT_SOURCES: list[BaseSourceAdapter] = [
     NISTAdapter(),
 ]
 
-_GENESIS_HASH = "0" * 64
+_GENESIS_HASH = GENESIS_HASH  # kept for backwards compatibility
 
 
 class CanonMonitor:
+    """
+    Canon's central monitor.
+    Fetches all configured sources, diffs against stored baselines,
+    produces EvidencePackages, generates proposals, writes to ledger.
+    """
+
     def __init__(
         self,
         canon_dir: Path | None = None,
         sources: list[BaseSourceAdapter] | None = None,
+        anchor_repo_root: Path | None = None,
     ):
         self.canon_dir = canon_dir or Path(".canon")
         self.canon_dir.mkdir(parents=True, exist_ok=True)
         self.sources = sources or _DEFAULT_SOURCES
         self.ledger_path = self.canon_dir / "ledger.jsonl"
+        self.ledger = Ledger(self.ledger_path)
         self.states_dir = self.canon_dir / "states"
         self.states_dir.mkdir(parents=True, exist_ok=True)
         self.evidence_dir = self.canon_dir / "evidence"
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
+        # If set, proposals are written to anchor_repo_root/.canon/proposals/
+        self.anchor_repo_root = anchor_repo_root
 
-    async def run(self, github_token: str | None = None) -> list[EvidencePackage]:
+    async def run(
+        self,
+        github_token: str | None = None,
+        generate_proposals: bool = True,
+    ) -> list[EvidencePackage]:
+        """
+        Fetch all sources, diff against baselines, return EvidencePackages.
+        If anchor_repo_root is set and generate_proposals=True,
+        proposal packages are written to .canon/proposals/.
+        """
         headers = {}
         if github_token:
             headers["Authorization"] = f"Bearer {github_token}"
 
         packages: list[EvidencePackage] = []
+
         async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
             for adapter in self.sources:
                 pkg = await self._process_source(adapter, client)
                 if pkg:
                     packages.append(pkg)
+
+        # Generate proposals for packages with changes
+        if generate_proposals and self.anchor_repo_root:
+            from canon.proposals.generator import generate_proposal
+            for pkg in packages:
+                if pkg.change_count > 0:
+                    generate_proposal(
+                        evidence_package=pkg,
+                        anchor_repo_root=self.anchor_repo_root,
+                        canon_dir=self.canon_dir,
+                    )
+
         return packages
 
     async def _process_source(
-        self, adapter: BaseSourceAdapter, client: httpx.AsyncClient
+        self,
+        adapter: BaseSourceAdapter,
+        client: httpx.AsyncClient,
     ) -> EvidencePackage | None:
-        start = time.perf_counter()
-        current = await adapter.fetch_state(client)
-        fetch_ms = (time.perf_counter() - start) * 1000
+        """
+        Process a single source adapter.
 
-        baseline_path = self.states_dir / f"{adapter.source_id}.json"
-        if not baseline_path.exists():
-            baseline_path.write_text(current.model_dump_json(indent=2))
+        - First run for a source: store the baseline, ledger "initial_state", return None.
+        - Hash unchanged: return None.
+        - Hash changed and rules differ: write the EvidencePackage, ledger "evidence",
+          advance the stored baseline to the fetched state, return the package.
+        - Hash changed but no diffed field differs (e.g. only version/source_path
+          changed): advance the baseline and ledger "state_refresh", return None.
+
+        The baseline advances as soon as evidence is recorded, so the same upstream
+        change is not re-reported on every fetch. The change stays in
+        .canon/evidence/ until a human approves or rejects it.
+        """
+        current = await adapter.fetch_state(client)
+        if not current.raw_hash:
+            current.compute_hash()
+
+        state_path = self.states_dir / f"{adapter.source_id}.json"
+
+        if not state_path.exists():
+            self._save_state(state_path, current)
             self._write_ledger_entry("initial_state", current.raw_hash)
             return None
 
-        baseline = SourceState.model_validate_json(baseline_path.read_text())
+        baseline = SourceState.model_validate_json(
+            state_path.read_text(encoding="utf-8")
+        )
+        if baseline.raw_hash == current.raw_hash:
+            return None
 
-        diff_start = time.perf_counter()
         package = diff_states(baseline, current)
-        diff_ms = (time.perf_counter() - diff_start) * 1000
+        if package.change_count == 0:
+            self._save_state(state_path, current)
+            self._write_ledger_entry("state_refresh", current.raw_hash)
+            return None
 
-        object.__setattr__(package, "_fetch_ms", round(fetch_ms, 2))
-        object.__setattr__(package, "_diff_ms", round(diff_ms, 2))
-
-        if package.change_count > 0:
-            ep_path = self.evidence_dir / f"{package.evidence_id}.json"
-            ep_path.write_text(package.model_dump_json(indent=2))
-            baseline_path.write_text(current.model_dump_json(indent=2))
-            self._write_ledger_entry("evidence", package.evidence_hash)
-
+        # Order matters: evidence and ledger first, baseline last, so a crash
+        # mid-way leads to re-detection rather than a silently lost change.
+        evidence_path = self.evidence_dir / f"{package.evidence_id}.json"
+        evidence_path.write_text(package.model_dump_json(indent=2), encoding="utf-8")
+        self._write_ledger_entry("evidence", package.evidence_hash)
+        self._save_state(state_path, current)
         return package
 
+    def _save_state(self, path: Path, state: SourceState) -> None:
+        path.write_text(state.model_dump_json(indent=2), encoding="utf-8")
+
     def _write_ledger_entry(self, entry_type: str, payload_hash: str) -> None:
-        prev_hash = self._get_last_chain_hash()
-        entry = CanonLedgerEntry(
-            entry_id=str(uuid.uuid4()),
-            entry_type=entry_type,
-            payload_hash=payload_hash,
-            prev_entry_hash=prev_hash,
-        )
-        entry.compute_chain_hash()
-        with self.ledger_path.open("a") as f:
-            f.write(entry.model_dump_json() + "\n")
+        self.ledger.append(entry_type, payload_hash)
 
     def _get_last_chain_hash(self) -> str:
-        if not self.ledger_path.exists():
-            return _GENESIS_HASH
-        lines = self.ledger_path.read_text().strip().splitlines()
-        if not lines:
-            return _GENESIS_HASH
-        last = CanonLedgerEntry.model_validate_json(lines[-1])
-        return last.chain_hash
+        return self.ledger.last_hash()
 
     def load_pending_evidence(self) -> list[EvidencePackage]:
-        approved = self._load_approved_ids()
+        resolved = self._load_resolved_ids()
         packages = []
         for ep_file in sorted(self.evidence_dir.glob("*.json")):
-            pkg = EvidencePackage.model_validate_json(ep_file.read_text())
-            if pkg.evidence_id not in approved:
+            pkg = EvidencePackage.model_validate_json(
+                ep_file.read_text(encoding="utf-8")
+            )
+            if pkg.evidence_id not in resolved:
                 packages.append(pkg)
         return packages
 
-    def _load_approved_ids(self) -> set[str]:
+    def _load_resolved_ids(self) -> set[str]:
+        """Evidence ids with a final decision. 'deferred' is NOT final."""
         approval_dir = self.canon_dir / "approvals"
         if not approval_dir.exists():
             return set()
         ids = set()
         for f in approval_dir.glob("*.json"):
-            data = json.loads(f.read_text())
-            ids.add(data.get("evidence_id", ""))
+            data = json.loads(f.read_text(encoding="utf-8"))
+            if data.get("decision") in ("approved", "rejected"):
+                ids.add(data.get("evidence_id", ""))
         return ids

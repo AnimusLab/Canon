@@ -1,4 +1,4 @@
-"""
+﻿"""
 Canon CLI.
 canon fetch    - fetch all sources, produce evidence packages
 canon review   - interactive human review of pending evidence
@@ -22,6 +22,52 @@ from canon.monitor.monitor import CanonMonitor
 
 app = typer.Typer(name="canon", help="Canon - Deterministic governance knowledge integrity engine.")
 console = Console()
+
+
+
+@app.command()
+def sync(
+    anchor_root: str = typer.Option(..., help="Path to the Anchor repository root"),
+    canon_dir: str = typer.Option(".canon", help="Canon state directory"),
+    github_token: str = typer.Option(None, envvar="GITHUB_TOKEN"),
+):
+    """Fetch sources, diff, and generate proposals in an Anchor repository."""
+    anchor_path = Path(anchor_root).resolve()
+    if not anchor_path.exists():
+        console.print(f"[red]Anchor root not found: {anchor_path}[/red]")
+        raise typer.Exit(1)
+
+    # Default canon_dir to inside the Anchor repo
+    canon_path = (
+        Path(canon_dir)
+        if canon_dir != ".canon"
+        else anchor_path / ".canon"
+    )
+
+    monitor = CanonMonitor(
+        canon_dir=canon_path,
+        anchor_repo_root=anchor_path,
+    )
+    console.print(
+        f"[bold blue]Canon Sync[/bold blue] - Anchor root: {anchor_path}\n"
+    )
+    packages = asyncio.run(monitor.run(
+        github_token=github_token,
+        generate_proposals=True,
+    ))
+
+    pending = [p for p in packages if p.change_count > 0]
+    if not pending:
+        console.print(
+            "[green]All sources match baseline. No proposals generated.[/green]"
+        )
+        return
+
+    console.print(f"\n[yellow]{len(pending)} proposal(s) generated.[/yellow]")
+    console.print(
+        f"Run [bold]canon review --canon-dir {canon_path}[/bold] to review."
+    )
+
 
 
 @app.command()
@@ -108,15 +154,24 @@ def review(
 
 @app.command()
 def verify(canon_dir: str = typer.Option(".canon")):
-    """Verify integrity of Canon approval records."""
+    """Verify the ledger hash chain and the integrity of approval records."""
     gate = ApprovalGate(canon_dir=Path(canon_dir))
     tampered = gate.verify_integrity()
-    if tampered:
-        console.print(f"[bold red]INTEGRITY VIOLATION: {len(tampered)} tampered record(s)[/bold red]")
+    chain_problems = gate.ledger.verify()
+    binding_problems = gate.verify_ledger_binding()
+
+    if tampered or chain_problems or binding_problems:
+        console.print("[bold red]INTEGRITY VIOLATION[/bold red]")
         for r in tampered:
-            console.print(f"  - {r}")
+            console.print(f"  - tampered approval record: {r}")
+        for p in chain_problems:
+            console.print(f"  - ledger: {p}")
+        for p in binding_problems:
+            console.print(f"  - ledger/approval mismatch: {p}")
         raise typer.Exit(1)
-    console.print("[bold green]INTEGRITY VERIFIED: All approval records intact.[/bold green]")
+    console.print(
+        "[bold green]INTEGRITY VERIFIED: ledger chain and approval records intact.[/bold green]"
+    )
 
 
 @app.command()

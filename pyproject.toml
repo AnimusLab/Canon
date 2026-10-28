@@ -4,10 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "canon-governance"
-version = "0.1.0"
+version = "0.1.1"
 description = "Deterministic governance knowledge integrity engine for AI systems"
 authors = [{name = "Tanishq Dasari", email = "tan@animuslab.dev"}]
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

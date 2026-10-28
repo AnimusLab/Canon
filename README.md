@@ -40,13 +40,13 @@ canon fetch
 ```
 
 ### 2. Review Pending Decisions
-Interactively inspect and approve/reject pending evidence packages.
+Interactively inspect and approve/reject/defer pending evidence packages. Each decision is written to `.canon/approvals/` and appended to the ledger. Deferred packages stay in the pending queue; approved and rejected ones leave it.
 ```bash
 canon review
 ```
 
 ### 3. Verify Ledger Integrity
-Verify the tamper-evident signature chain of all recorded approval records.
+Verify the ledger's hash chain, every approval record's hash, and that approval records and ledger `approval` entries match one another. Exits non-zero on any violation.
 ```bash
 canon verify
 ```
@@ -77,4 +77,4 @@ Under benchmark conditions (compiled on Python 3.14), Canon operates at microsec
 
 ## Next Steps & Integrations
 
-For a deep dive into how Canon integrates with the broader ecosystem, please read the [Architecture Document](file:///D:/canon/ARCHITECTURE.md).
+For a deep dive into how Canon integrates with the broader ecosystem, please read the [Architecture Document](ARCHITECTURE.md).
