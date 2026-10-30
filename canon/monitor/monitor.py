@@ -15,6 +15,7 @@ from canon.diff.engine import diff_states
 from canon.ledger import GENESIS_HASH, Ledger
 from canon.models import EvidencePackage, SourceState
 from canon.sources.base import BaseSourceAdapter
+from canon.sources.github_fetch import describe_error
 from canon.sources.finos import FINOSAdapter
 from canon.sources.nist import NISTAdapter
 from canon.sources.owasp import OWASPAdapter
@@ -52,6 +53,8 @@ class CanonMonitor:
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
         # If set, proposals are written to anchor_repo_root/.canon/proposals/
         self.anchor_repo_root = anchor_repo_root
+        self.errors: dict[str, str] = {}
+        self.warnings: list[str] = []
 
     async def run(
         self,
@@ -59,25 +62,34 @@ class CanonMonitor:
         generate_proposals: bool = True,
     ) -> list[EvidencePackage]:
         """
-        Fetch all sources, diff against baselines, return EvidencePackages.
-        If anchor_repo_root is set and generate_proposals=True,
-        proposal packages are written to .canon/proposals/.
+        Fetch all sources independently, diff against baselines, and return
+        evidence packages. Errors from one adapter do not stop other sources.
         """
-        headers = {}
-        if github_token:
-            headers["Authorization"] = f"Bearer {github_token}"
+        self.errors = {}
+        self.warnings = []
+
+        async def _auth_hook(request: httpx.Request) -> None:
+            if github_token and request.url.host == "api.github.com":
+                request.headers["Authorization"] = f"Bearer {github_token}"
 
         packages: list[EvidencePackage] = []
 
-        async with httpx.AsyncClient(headers=headers, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            follow_redirects=True,
+            event_hooks={"request": [_auth_hook]},
+        ) as client:
             for adapter in self.sources:
-                pkg = await self._process_source(adapter, client)
+                try:
+                    pkg = await self._process_source(adapter, client)
+                except Exception as exc:
+                    self.errors[adapter.source_id] = describe_error(exc)
+                    continue
                 if pkg:
                     packages.append(pkg)
 
-        # Generate proposals for packages with changes
         if generate_proposals and self.anchor_repo_root:
             from canon.proposals.generator import generate_proposal
+
             for pkg in packages:
                 if pkg.change_count > 0:
                     generate_proposal(
@@ -110,6 +122,8 @@ class CanonMonitor:
         current = await adapter.fetch_state(client)
         if not current.raw_hash:
             current.compute_hash()
+        if current.fetch_note:
+            self.warnings.append(f"{adapter.source_name}: {current.fetch_note}")
 
         state_path = self.states_dir / f"{adapter.source_id}.json"
 
@@ -121,6 +135,12 @@ class CanonMonitor:
         baseline = SourceState.model_validate_json(
             state_path.read_text(encoding="utf-8")
         )
+        if current.degraded and not baseline.degraded:
+            self.warnings.append(
+                f"{adapter.source_name}: degraded fetch ignored; kept the existing baseline"
+            )
+            return None
+
         if baseline.raw_hash == current.raw_hash:
             return None
 

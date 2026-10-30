@@ -9,6 +9,7 @@ import httpx
 
 from canon.models import SourceState
 from canon.sources.base import BaseSourceAdapter
+from canon.sources.github_fetch import describe_error
 
 _NIST_CPRT_URL = "https://csrc.nist.gov/extensions/nudgeapi/public/api/cprt"
 _NIST_RMF_ID = "ai_rmf"
@@ -22,11 +23,17 @@ class NISTAdapter(BaseSourceAdapter):
     async def fetch_state(self, client: httpx.AsyncClient) -> SourceState:
         rules: dict[str, Any] = {}
         version_tag = "1.0"
+        fetch_method, degraded, fetch_note = "nist-cprt", False, None
 
         try:
             rules, version_tag = await self._fetch_from_cprt(client)
-        except Exception:
+        except Exception as exc:
             rules = self._hardcoded_core_framework()
+            fetch_method, degraded = "bundled-fallback", True
+            fetch_note = (
+                f"NIST CPRT unavailable ({describe_error(exc)}); "
+                "using the bundled core-framework snapshot, not live NIST data"
+            )
 
         state = SourceState(
             source_id=self.source_id,
@@ -34,6 +41,9 @@ class NISTAdapter(BaseSourceAdapter):
             source_url=self.source_url,
             version_tag=version_tag,
             rules=rules,
+            fetch_method=fetch_method,
+            degraded=degraded,
+            fetch_note=fetch_note,
         )
         state.compute_hash()
         return state

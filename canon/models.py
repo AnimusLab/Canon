@@ -35,6 +35,10 @@ class SourceState(BaseModel):
     fetched_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     rules: dict[str, Any] = Field(default_factory=dict)
     raw_hash: str = ""
+    # Provenance of this snapshot. Deliberately NOT part of the hash.
+    fetch_method: str | None = None   # e.g. "github-api", "github-archive", "bundled-fallback"
+    degraded: bool = False            # True = reduced-fidelity data (bundled fallback)
+    fetch_note: str | None = None     # why a fallback was used
 
     def compute_hash(self) -> str:
         payload = json.dumps(self.rules, sort_keys=True).encode()

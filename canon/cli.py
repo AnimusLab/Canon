@@ -1,4 +1,4 @@
-﻿"""
+"""
 Canon CLI.
 canon fetch    - fetch all sources, produce evidence packages
 canon review   - interactive human review of pending evidence
@@ -19,6 +19,15 @@ from rich.table import Table
 from canon.approval.gate import ApprovalGate
 from canon.models import EvidencePackage, SourceState
 from canon.monitor.monitor import CanonMonitor
+
+def _report_run(monitor: CanonMonitor) -> bool:
+    """Print source warnings and failures. Return True if any source failed."""
+    for warning in monitor.warnings:
+        console.print(f"[yellow]WARNING:[/yellow] {warning}")
+    for source_id, message in monitor.errors.items():
+        console.print(f"[red]FAILED {source_id}:[/red] {message}")
+    return bool(monitor.errors)
+
 
 app = typer.Typer(name="canon", help="Canon - Deterministic governance knowledge integrity engine.")
 console = Console()
@@ -56,17 +65,22 @@ def sync(
         generate_proposals=True,
     ))
 
+    failed = _report_run(monitor)
     pending = [p for p in packages if p.change_count > 0]
     if not pending:
-        console.print(
-            "[green]All sources match baseline. No proposals generated.[/green]"
-        )
-        return
+        if not failed:
+            console.print(
+                "[green]Sources checked successfully. No proposals generated.[/green]"
+            )
+        raise typer.Exit(1 if failed else 0)
 
     console.print(f"\n[yellow]{len(pending)} proposal(s) generated.[/yellow]")
     console.print(
         f"Run [bold]canon review --canon-dir {canon_path}[/bold] to review."
     )
+
+    if failed:
+        raise typer.Exit(1)
 
 
 
@@ -80,10 +94,12 @@ def fetch(
     console.print("[bold blue]Canon[/bold blue] - Fetching governance sources...\n")
     packages = asyncio.run(monitor.run(github_token=github_token))
 
+    failed = _report_run(monitor)
     pending = [p for p in packages if p.change_count > 0]
     if not pending:
-        console.print("[green]All sources match baseline. No changes detected.[/green]")
-        return
+        if not failed:
+            console.print("[green]Sources checked successfully. No changes detected.[/green]")
+        raise typer.Exit(1 if failed else 0)
 
     for pkg in pending:
         colour = "red" if pkg.critical_changes else "yellow"
@@ -101,6 +117,9 @@ def fetch(
     if pending:
         console.print(f"\n[yellow]{len(pending)} evidence package(s) pending review.[/yellow]")
         console.print("Run [bold]canon review[/bold] to inspect and approve.")
+
+    if failed:
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -186,14 +205,18 @@ def status(canon_dir: str = typer.Option(".canon")):
     table.add_column("Source", style="bold")
     table.add_column("Version/Commit")
     table.add_column("Rules")
+    table.add_column("Fetched via")
     table.add_column("Hash (8 chars)")
     table.add_column("Last Fetched")
 
     for state_file in sorted(states_dir.glob("*.json")):
-        state = SourceState.model_validate_json(state_file.read_text())
+        state = SourceState.model_validate_json(state_file.read_text(encoding="utf-8"))
         version = state.version_tag or (state.commit_sha[:8] if state.commit_sha else "unknown")
+        method = state.fetch_method or "unknown"
+        if state.degraded:
+            method += " (degraded)"
         table.add_row(
-            state.source_name, version, str(len(state.rules)),
+            state.source_name, version, str(len(state.rules)), method,
             state.raw_hash[:8], state.fetched_at.strftime("%Y-%m-%d %H:%M UTC"),
         )
     console.print(table)

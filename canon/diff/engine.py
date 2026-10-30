@@ -65,6 +65,11 @@ def diff_states(baseline: SourceState, current: SourceState) -> EvidencePackage:
         for field in ("title", "description", "severity", "category", "regulatory_refs"):
             if old.get(field) != new.get(field):
                 changed_fields[field] = {"old": old.get(field), "new": new.get(field)}
+        # Full-source-text fingerprint: catches edits outside the extracted fields.
+        # Compared only when both snapshots carry it (older baselines do not).
+        old_ch, new_ch = old.get("content_hash"), new.get("content_hash")
+        if old_ch and new_ch and old_ch != new_ch:
+            changed_fields["content_hash"] = {"old": old_ch, "new": new_ch}
         if not changed_fields:
             continue
 
